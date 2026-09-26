@@ -1,0 +1,16 @@
+{
+  "name": "uecbot",
+  "version": "1.0.0",
+  "description": "Discord bot - #SCENEPACK channel mein naam likho, embed mein mega link mil jayega",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "deploy": "node index.js --deploy"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3"
+  }
+}
