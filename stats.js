@@ -149,6 +149,236 @@ async function fetchRssList(channelId) {
   }
 }
 
+function ytKey() {
+  return String(process.env.YOUTUBE_API_KEY || '').trim() || null;
+}
+
+async function ytApi(endpoint, params) {
+  const u = new URL(`https://www.googleapis.com/youtube/v3/${endpoint}`);
+  u.searchParams.set('key', ytKey());
+  for (const [k, v] of Object.entries(params)) {
+    if (v != null && v !== '') u.searchParams.set(k, v);
+  }
+  const res = await fetch(u);
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || j.error) {
+    throw new Error(`YT API ${res.status}: ${j.error ? j.error.message : 'error'}`);
+  }
+  return j;
+}
+
+function iso8601Seconds(d) {
+  if (!d) return 0;
+  const m = String(d).match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!m) return 0;
+  return Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Number(m[3] || 0);
+}
+
+async function apiGetChannel(params) {
+  const j = await ytApi('channels', { part: 'snippet,statistics,contentDetails', ...params });
+  const c = j.items && j.items[0];
+  if (!c) return null;
+  const sn = c.snippet || {};
+  const st = c.statistics || {};
+  const thumbs = sn.thumbnails || {};
+  const avatar = (thumbs.high || thumbs.medium || thumbs.default || {}).url || null;
+  return {
+    id: c.id,
+    title: sn.title || 'YouTube Channel',
+    customUrl: sn.customUrl || null,
+    description: sn.description || null,
+    avatar,
+    subscriberCount:
+      st.subscriberCount && !st.hiddenSubscriberCount
+        ? Number(st.subscriberCount).toLocaleString('en-US')
+        : null,
+    totalViews: st.viewCount ? Number(st.viewCount).toLocaleString('en-US') : null,
+    videoCount: st.videoCount ? Number(st.videoCount).toLocaleString('en-US') : null,
+    joined: sn.publishedAt
+      ? new Date(sn.publishedAt).toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        })
+      : null,
+    uploads: (c.contentDetails && c.contentDetails.relatedPlaylists && c.contentDetails.relatedPlaylists.uploads) || null,
+  };
+}
+
+async function apiVideos(ids) {
+  if (!ids.length) return [];
+  const j = await ytApi('videos', {
+    part: 'snippet,statistics,contentDetails',
+    id: ids.slice(0, 50).join(','),
+  });
+  return (j.items || []).map((v) => {
+    const sn = v.snippet || {};
+    return {
+      id: v.id,
+      channelId: sn.channelId || null,
+      title: sn.title || 'Untitled video',
+      date: sn.publishedAt || null,
+      views: v.statistics && v.statistics.viewCount != null ? Number(v.statistics.viewCount) : null,
+      duration: iso8601Seconds(v.contentDetails && v.contentDetails.duration),
+    };
+  });
+}
+
+async function apiPlaylistItems(uploadsPlaylistId, max = 50) {
+  const j = await ytApi('playlistItems', {
+    part: 'snippet,contentDetails',
+    playlistId: uploadsPlaylistId,
+    maxResults: String(max),
+  });
+  return (j.items || [])
+    .map((it) => {
+      const cd = it.contentDetails || {};
+      const sn = it.snippet || {};
+      return {
+        id: cd.videoId || (cd.resourceId && cd.resourceId.videoId) || null,
+        title: cd.title || sn.title || null,
+        date: cd.videoPublishedAt || sn.publishedAt || null,
+      };
+    })
+    .filter((x) => x.id);
+}
+
+async function apiMostViewed(channelId) {
+  const j = await ytApi('search', {
+    part: 'snippet',
+    channelId,
+    type: 'video',
+    order: 'viewCount',
+    maxResults: '1',
+  });
+  const item = j.items && j.items[0];
+  const id = item && item.id && item.id.videoId;
+  if (!id) return null;
+  const [d] = await apiVideos([id]);
+  if (d) {
+    return {
+      id: d.id,
+      title: d.title,
+      views: d.views,
+      date: d.date,
+      when: null,
+      isShort: d.duration > 0 && d.duration < 61,
+    };
+  }
+  const sn = item.snippet || {};
+  return {
+    id,
+    title: sn.title || 'Untitled video',
+    views: null,
+    date: sn.publishedAt || null,
+    when: null,
+    isShort: false,
+  };
+}
+
+async function apiChannelStats(raw) {
+  const target = resolveTarget(raw);
+  if (!target || (!target.handle && !target.channelId && !target.videoId)) {
+    throw new Error('That does not look like a YouTube channel link.');
+  }
+  if (target.legacy) throw new Error('legacy username channel');
+
+  let channelId = target.channelId || null;
+  let sharedVideo = null;
+
+  const loadVideo = async (id) => {
+    const [v] = await apiVideos([id]);
+    if (!v || !v.channelId) return false;
+    channelId = v.channelId;
+    sharedVideo = { id: v.id, title: v.title, views: v.views, date: v.date, seconds: v.duration };
+    return true;
+  };
+
+  if (target.videoId && !(await loadVideo(target.videoId))) {
+    throw new Error('Could not read that YouTube video link.');
+  }
+
+  let ch = null;
+  if (channelId) {
+    ch = await apiGetChannel({ id: channelId });
+  } else if (target.handle) {
+    ch = await apiGetChannel({ forHandle: '@' + target.handle });
+    if (!ch && target.bare11 && (await loadVideo(target.bare11))) {
+      ch = await apiGetChannel({ id: channelId });
+    }
+  }
+  if (!ch) throw new Error('YouTube channel not found. Check the link.');
+
+  channelId = ch.id;
+  const handle = (ch.customUrl || '').replace(/^@/, '') || null;
+
+  let details = [];
+  if (ch.uploads) {
+    try {
+      const items = await apiPlaylistItems(ch.uploads, 50);
+      if (items.length) details = await apiVideos(items.map((i) => i.id));
+    } catch {
+      details = [];
+    }
+  }
+
+  const shorts = details
+    .filter((v) => v.duration > 0 && v.duration < 61)
+    .map((v) => ({ id: v.id, title: v.title, views: v.views }));
+
+  const first = details[0] || null;
+  const latest = first
+    ? {
+        id: first.id,
+        title: first.title,
+        date: first.date,
+        when: null,
+        views: first.views,
+        isShort: first.duration > 0 && first.duration < 61,
+      }
+    : null;
+
+  let top = [];
+  try {
+    const mv = await apiMostViewed(channelId);
+    if (mv) top = [mv];
+  } catch {
+    top = [];
+  }
+  if (!top.length && details.length) {
+    top = [...details]
+      .sort((a, b) => (b.views || 0) - (a.views || 0))
+      .slice(0, 3)
+      .map((v) => ({
+        id: v.id,
+        title: v.title,
+        views: v.views,
+        date: v.date,
+        when: null,
+        isShort: v.duration > 0 && v.duration < 61,
+      }));
+  }
+
+  return {
+    name: ch.title,
+    handle,
+    channelId,
+    url: handle ? `https://www.youtube.com/@${handle}` : `https://www.youtube.com/channel/${channelId}`,
+    avatar: ch.avatar,
+    description: ch.description || null,
+    subs: ch.subscriberCount,
+    totalViews: ch.totalViews,
+    joined: ch.joined,
+    videoCount: ch.videoCount,
+    latest,
+    top,
+    shorts,
+    sharedVideo,
+    source: 'api',
+    fetchedAt: Date.now(),
+  };
+}
+
 function resolveTarget(raw) {
   const s = String(raw || '')
     .trim()
@@ -251,13 +481,7 @@ async function fetchPopular(videosHtml, channelId) {
   }
 }
 
-async function getChannelStats(raw) {
-  const key = String(raw || '')
-    .trim()
-    .toLowerCase();
-  const hit = CACHE.get(key);
-  if (hit && Date.now() - hit.at < CACHE_TTL) return hit.data;
-
+async function scrapeChannelStats(raw) {
   const target = resolveTarget(raw);
   if (!target || (!target.handle && !target.channelId && !target.videoId)) {
     throw new Error('That does not look like a YouTube channel link.');
@@ -399,6 +623,26 @@ async function getChannelStats(raw) {
     fetchedAt: Date.now(),
   };
 
+  return data;
+}
+
+async function getChannelStats(raw) {
+  const key = String(raw || '')
+    .trim()
+    .toLowerCase();
+  const hit = CACHE.get(key);
+  if (hit && Date.now() - hit.at < CACHE_TTL) return hit.data;
+
+  let data = null;
+  if (ytKey()) {
+    try {
+      data = await apiChannelStats(raw);
+    } catch {
+      data = null;
+    }
+  }
+  if (!data) data = await scrapeChannelStats(raw);
+
   CACHE.set(key, { at: Date.now(), data });
   return data;
 }
@@ -424,7 +668,7 @@ function buildChannelEmbed(s) {
     (a, b) => ((b.views || 0) > ((a && a.views) || 0) ? b : a),
     null
   );
-  let best = s.top && s.top[0] ? { ...s.top[0], isShort: false } : null;
+  let best = s.top && s.top[0] ? { ...s.top[0], isShort: Boolean(s.top[0].isShort) } : null;
   if (shortsBest && (!best || viewsToNum(shortsBest.views) > viewsToNum(best.views))) {
     best = { ...shortsBest, isShort: true };
   }
@@ -433,7 +677,12 @@ function buildChannelEmbed(s) {
     .setColor(COLOR_YT)
     .setTitle(`${E.search} ${s.name} — YouTube Stats`)
     .setURL(s.url)
-    .setFooter({ text: 'UECBOT • YouTube stats • updated every 10 min' })
+    .setFooter({
+      text:
+        s.source === 'api'
+          ? 'UECBOT • YouTube Data API • updated every 10 min'
+          : 'UECBOT • YouTube stats • updated every 10 min',
+    })
     .setTimestamp();
 
   if (s.avatar) embed.setThumbnail(s.avatar);

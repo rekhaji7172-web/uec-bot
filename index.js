@@ -459,6 +459,11 @@ client.once('clientReady', async () => {
   if (!process.env.OPENROUTER_API_KEY) {
     console.warn('[warn] OPENROUTER_API_KEY not set - /ask AI will not work until you add it.');
   }
+  if (process.env.YOUTUBE_API_KEY && process.env.YOUTUBE_API_KEY.trim()) {
+    console.log('YouTube Data API: ON (accurate !stats)');
+  } else {
+    console.log('YouTube Data API: not set - !stats using scraping fallback');
+  }
   try {
     const rest = new REST().setToken(TOKEN);
     const guilds = await rest.get(Routes.userGuilds());
