@@ -302,17 +302,6 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    if (mentionsBot) {
-      const question = stripMentions(content);
-      const startMsg = await message.channel.send({
-        embeds: [AI.buildStartEmbed(question)],
-        components: [startRow(message.author.id)],
-        allowedMentions: { parse: [] },
-      });
-      if (question) AI.setPending(startMsg.id, question);
-      return;
-    }
-
     if (!CHANNEL_IDS.has(message.channelId)) return;
 
     const payload = resolve(content);

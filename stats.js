@@ -83,7 +83,7 @@ function resolveTarget(raw) {
 
   if (/^@[\w.-]{1,}$/.test(s)) return { handle: s.slice(1) };
   if (/^UC[\w-]{22}$/.test(s)) return { channelId: s };
-  if (/^[\w-]{11}$/.test(s)) return { videoId: s };
+  if (/^[\w-]{11}$/.test(s)) return { handle: s, bare11: s };
   if (/^[\w.-]{2,40}$/.test(s)) return { handle: s };
 
   let u;
@@ -106,7 +106,14 @@ function resolveTarget(raw) {
 
   const seg = u.pathname.split('/').filter(Boolean);
   if (!seg.length) return { handle: null };
-  if (seg[0].startsWith('@')) return { handle: seg[0].slice(1) };
+  if (seg[0] === 'shorts' && /^[\w-]{11}$/.test(seg[1] || '')) return { videoId: seg[1] };
+  if (seg[0] === 'live' && /^[\w-]{11}$/.test(seg[1] || '')) return { videoId: seg[1] };
+  if (seg[0].startsWith('@')) {
+    if ((seg[1] === 'shorts' || seg[1] === 'live') && /^[\w-]{11}$/.test(seg[2] || '')) {
+      return { videoId: seg[2] };
+    }
+    return { handle: seg[0].slice(1) };
+  }
   if (seg[0] === 'channel' && seg[1]) return { channelId: seg[1] };
   if ((seg[0] === 'c' || seg[0] === 'user') && seg[1]) return { legacy: seg[1] };
   if (seg[0] === 'watch') return null;
@@ -183,12 +190,32 @@ async function getChannelStats(raw) {
   }
 
   let channelId = target.channelId || null;
-  let videoId = target.videoId || null;
+  const videoId = target.videoId || null;
+  let sharedVideo = null;
 
-  if (videoId) {
-    const watch = await fetchText(`https://www.youtube.com/watch?v=${videoId}`);
-    channelId = one(watch, /"channelId":"(UC[\w-]{22})"/);
-    if (!channelId) throw new Error('Could not read that YouTube video link.');
+  const loadVideo = async (id) => {
+    const watch = await fetchText(`https://www.youtube.com/watch?v=${id}`).catch(() => '');
+    const cid = one(watch, /"channelId":"(UC[\w-]{22})"/);
+    if (!cid) return false;
+    channelId = cid;
+    const vdIdx = watch.indexOf('"videoDetails":{');
+    const vd = vdIdx === -1 ? '' : watch.slice(vdIdx, vdIdx + 3000);
+    const vTitle = jstr(one(vd, /"title":"((?:[^"\\]|\\.)*)"/));
+    const vViews = one(watch, /"viewCount":"(\d+)"/);
+    const vDate = one(watch, /"publishDate":"([^"]+)"/) || one(watch, /"uploadDate":"([^"]+)"/);
+    const vLen = Number(one(watch, /"lengthSeconds":"(\d+)"/) || 0);
+    sharedVideo = {
+      id,
+      title: vTitle || 'Untitled video',
+      views: vViews ? Number(vViews) : null,
+      date: vDate || null,
+      seconds: vLen,
+    };
+    return true;
+  };
+
+  if (videoId && !(await loadVideo(videoId))) {
+    throw new Error('Could not read that YouTube video link.');
   }
 
   let aboutUrl;
@@ -202,8 +229,16 @@ async function getChannelStats(raw) {
     throw new Error('That does not look like a YouTube channel link.');
   }
 
-  const about = await fetchText(aboutUrl).catch(() => null);
-  if (!about || !about.includes('channelMetadataRenderer')) {
+  let about = await fetchText(aboutUrl).catch(() => null);
+  const aboutOk = () => about && about.includes('channelMetadataRenderer');
+
+  if (!aboutOk() && target.bare11 && !videoId) {
+    if (await loadVideo(target.bare11)) {
+      aboutUrl = `https://www.youtube.com/channel/${channelId}/about`;
+      about = await fetchText(aboutUrl).catch(() => null);
+    }
+  }
+  if (!aboutOk()) {
     throw new Error('YouTube channel not found. Check the link.');
   }
 
@@ -260,6 +295,7 @@ async function getChannelStats(raw) {
     videoCount: videoCount ? `${videoCount} videos` : null,
     latest,
     top: top || [],
+    sharedVideo,
     fetchedAt: Date.now(),
   };
 
@@ -275,10 +311,7 @@ function videoLine(v) {
 }
 
 function buildChannelEmbed(s) {
-  const topLines = s.top
-    .slice(0, 3)
-    .map((v, i) => `${i + 1}. ${videoLine(v)}`)
-    .join('\n');
+  const topOne = s.top && s.top[0];
 
   const embed = new EmbedBuilder()
     .setColor(COLOR_YT)
@@ -308,8 +341,30 @@ function buildChannelEmbed(s) {
       inline: false,
     });
   }
-  if (topLines) {
-    embed.addFields({ name: `${E.target} Most Viewed Videos`, value: topLines, inline: false });
+
+  if (s.sharedVideo) {
+    const v = s.sharedVideo;
+    const title = String(v.title || 'Untitled').replace(/[[\]()`*_|]/g, '').slice(0, 70);
+    const bits = [];
+    if (v.views != null) bits.push(`**${v.views.toLocaleString('en-US')} views**`);
+    if (v.date) {
+      const ms = Date.parse(v.date);
+      bits.push(isNaN(ms) ? String(v.date).slice(0, 10) : `<t:${Math.floor(ms / 1000)}:D>`);
+    }
+    const isShort = v.seconds > 0 && v.seconds < 61;
+    embed.addFields({
+      name: isShort ? `${E.click} Shared Short` : `${E.click} Shared Video`,
+      value: `[\`${title}\`](https://www.youtube.com/watch?v=${v.id})${bits.length ? ` — ${bits.join(' • ')}` : ''}`,
+      inline: false,
+    });
+  }
+
+  if (topOne) {
+    embed.addFields({
+      name: `${E.target} Most Viewed Video`,
+      value: videoLine(topOne),
+      inline: false,
+    });
   }
 
   const row = new ActionRowBuilder().addComponents(
@@ -400,8 +455,8 @@ function buildHelpEmbed() {
         '▸ `/scenepack <name>` — slash version',
         '',
         `${E.rocket} **Unstable SMP AI Chat**`,
-        '▸ `/ask [question]` or `!ask [question]` — start chat',
-        '▸ `@bot <anything>` — start chat',
+        '▸ `/ask [question]` or `!ask [question]` — start chat, then press **Start Chat**',
+        '▸ After starting, just type your questions in that channel',
         '▸ `!end` — end your chat session',
         '',
         `${E.clock} **AFK System**`,
