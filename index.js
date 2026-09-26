@@ -41,7 +41,6 @@ const CHANNEL_IDS = new Set(
     .map((s) => s.trim())
     .filter(Boolean)
 );
-const GUILD_ID = process.env.GUILD_ID || '';
 
 if (!TOKEN) {
   console.error('[ERROR] DISCORD_TOKEN not found. Create a .env file (see .env.example)');
@@ -49,18 +48,18 @@ if (!TOKEN) {
 }
 
 const E = {
-  document: '<:document:1553319071024550019>',
-  view: '<:view:1553319992542629888>',
-  verified: '<:verified:1553319986548711474>',
-  click: '<:click:1553318995166371870>',
-  rightarrow: '<:rightarrow:1553319551855231009>',
-  search: '<:search:1553319601335439410>',
-  warning: '<:warning:1553320016005431327>',
-  menu: '<:menu:1553319217342976070>',
-  handshake: '<:handshake:1553319161743020135>',
-  rocket: '<:rocket:1553319575318167563>',
-  clock: '<:clock:1553319001713811516>',
-  okay: '<:okay:1553319280312066068>',
+  document: '<a:document:1553319071024550019>',
+  view: '<a:view:1553320000243236914>',
+  verified: '<a:verified:1553319992542629888>',
+  click: '<a:click:1553318995166371870>',
+  rightarrow: '<a:rightarrow:1553319551855231009>',
+  search: '<a:search:1553319601335439410>',
+  warning: '<a:warning:1553320016005431327>',
+  menu: '<a:menu:1553319217342976070>',
+  handshake: '<a:handshake:1553319161743020135>',
+  rocket: '<a:rocket:1553319575318167563>',
+  clock: '<a:clock:1553319001713811516>',
+  okay: '<a:okay:1553319280312066068>',
 };
 
 const COLOR = 0x5865f2;
@@ -239,13 +238,17 @@ client.once('clientReady', async () => {
   console.log(`Scenepack channels: ${[...CHANNEL_IDS].join(', ')}`);
   try {
     const rest = new REST().setToken(TOKEN);
-    if (GUILD_ID) {
-      await rest.put(Routes.applicationGuildCommands(client.user.id, GUILD_ID), { body: COMMANDS });
-      console.log(`Slash commands registered (guild ${GUILD_ID})`);
-    } else {
-      await rest.put(Routes.applicationCommands(client.user.id), { body: COMMANDS });
-      console.log('Slash commands registered globally (may take up to 1 hour)');
+    const guilds = await rest.get(Routes.userGuilds());
+    let ok = 0;
+    for (const g of guilds) {
+      try {
+        await rest.put(Routes.applicationGuildCommands(client.user.id, g.id), { body: COMMANDS });
+        ok++;
+      } catch (err) {
+        console.error(`[commands] ${g.name}: ${err.message}`);
+      }
     }
+    console.log(`Slash commands registered in ${ok}/${guilds.length} servers`);
   } catch (err) {
     if (err.code === 50001) {
       console.error('[commands] Missing Access - bot is not in that server. Invite it first (see invite URL).');
