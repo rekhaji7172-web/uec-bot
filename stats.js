@@ -10,7 +10,7 @@ const H = {
 const CACHE = new Map();
 const CACHE_TTL = 10 * 60 * 1000;
 
-const COLOR_YT = 0xff0000;
+const COLOR_YT = 0xe500e5;
 const COLOR_HELP = 0x5865f2;
 
 function one(text, re) {
@@ -248,7 +248,7 @@ async function getChannelStats(raw) {
   const rssUrl = one(metaChunk, /"rssUrl":"https:\/\/www\.youtube\.com\/feeds\/videos\.xml\?channel_id=(UC[\w-]{22})"/);
 
   const acIdx = about.indexOf('"aboutChannelViewModel":{');
-  const acChunk = acIdx === -1 ? '' : about.slice(acIdx, acIdx + 2000);
+  const acChunk = acIdx === -1 ? '' : about.slice(acIdx, acIdx + 6000);
   channelId = one(acChunk, /"channelId":"(UC[\w-]{22})"/) || rssUrl || channelId;
   const description = jstr(one(acChunk, /"description":"((?:[^"\\]|\\.)*)"/));
   const subs = one(acChunk, /"subscriberCountText":"([^"]+)"/);
@@ -256,6 +256,7 @@ async function getChannelStats(raw) {
   const joinedRaw = one(acChunk, /"joinedDateText":\{"content":"([^"]+)"/);
   const joined = joinedRaw ? joinedRaw.replace(/^Joined\s+/i, '') : null;
   const canonical = one(acChunk, /"canonicalChannelUrl":"([^"]+)"/);
+  const ownVideoCount = one(acChunk, /"videoCountText":"([\d,]+) videos"/);
 
   const handleFromUrl = canonical && canonical.includes('/@') ? canonical.split('/@')[1] : null;
   const handle = target.handle || handleFromUrl;
@@ -268,7 +269,7 @@ async function getChannelStats(raw) {
     : `https://www.youtube.com/@${handle}/videos`;
   const videosHtml = await fetchText(videosUrl);
 
-  let videoCount = pickVideoCount(about, subs);
+  let videoCount = ownVideoCount || pickVideoCount(about, subs);
   if (!videoCount) {
     const homeHtml = await fetchText(channelId ? `https://www.youtube.com/channel/${channelId}` : `https://www.youtube.com/@${handle}`).catch(() => '');
     videoCount = pickVideoCount(homeHtml, subs);
@@ -292,7 +293,7 @@ async function getChannelStats(raw) {
     subs: subs || null,
     totalViews: totalViews || null,
     joined: joined || null,
-    videoCount: videoCount ? `${videoCount} videos` : null,
+    videoCount: videoCount || null,
     latest,
     top: top || [],
     sharedVideo,
@@ -327,12 +328,22 @@ function buildChannelEmbed(s) {
     : null;
   if (bio) embed.setDescription(bio.length >= 220 ? bio + '…' : bio);
 
-  embed.addFields(
-    { name: `${E.user} Subscribers`, value: s.subs || 'N/A', inline: true },
-    { name: `${E.document} Total Videos`, value: s.videoCount || 'N/A', inline: true },
-    { name: `${E.view} Total Views`, value: s.totalViews || 'N/A', inline: true },
-    { name: `${E.clock} Joined YouTube`, value: s.joined || 'N/A', inline: true }
-  );
+  const channelLines = [];
+  if (s.subs) channelLines.push(`> Subscribers: **${s.subs.replace(/\s*subscribers?\s*/i, '').trim()}**`);
+  if (s.handle || s.channelId) channelLines.push(`> Handle: \`${s.handle ? '@' + s.handle : s.channelId}\``);
+  if (s.joined) channelLines.push(`> Joined YouTube: **${s.joined}**`);
+  if (channelLines.length) {
+    embed.addFields({ name: `${E.user} Channel`, value: channelLines.join('\n'), inline: false });
+  }
+
+  const contentLines = [];
+  if (s.videoCount) contentLines.push(`> Total videos: **${s.videoCount}**`);
+  if (s.totalViews) {
+    contentLines.push(`> Total views: **${s.totalViews.replace(/\s*views?\s*$/i, '').trim()}**`);
+  }
+  if (contentLines.length) {
+    embed.addFields({ name: `${E.view} Content`, value: contentLines.join('\n'), inline: false });
+  }
 
   if (s.latest) {
     embed.addFields({
@@ -455,8 +466,9 @@ function buildHelpEmbed() {
         '▸ `/scenepack <name>` — slash version',
         '',
         `${E.rocket} **Unstable SMP AI Chat**`,
-        '▸ `/ask [question]` or `!ask [question]` — start chat, then press **Start Chat**',
-        '▸ After starting, just type your questions in that channel',
+        '▸ `@bot <question>` — easiest way to call the AI',
+        '▸ `/ask [question]` or `!ask [question]` — same, press **Start Chat** after',
+        '▸ While chatting, mention me again for each question (e.g. `@bot who is Parrot?`)',
         '▸ `!end` — end your chat session',
         '',
         `${E.clock} **AFK System**`,

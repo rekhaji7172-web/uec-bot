@@ -296,9 +296,21 @@ client.on('messageCreate', async (message) => {
     const mentionsBot = Boolean(client.user && message.mentions.has(client.user));
 
     if (session && !content.startsWith('!')) {
+      if (!mentionsBot) return;
       if (AI.onCooldown(session)) return;
-      const question = (mentionsBot ? stripMentions(content) : content) || content;
+      const question = stripMentions(content) || content;
       await answerQuestion(message.channel, session, question);
+      return;
+    }
+
+    if (mentionsBot) {
+      const question = stripMentions(content);
+      const startMsg = await message.channel.send({
+        embeds: [AI.buildStartEmbed(question)],
+        components: [startRow(message.author.id)],
+        allowedMentions: { parse: [] },
+      });
+      if (question) AI.setPending(startMsg.id, question);
       return;
     }
 

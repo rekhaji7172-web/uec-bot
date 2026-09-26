@@ -371,7 +371,7 @@ function buildStartEmbed(question) {
     .setDescription(
       `I know everything about **Unstable SMP** - lore, theories, arcs, what is happening on YouTube and Reddit.\n\n` +
         `${E.click} **Press the button below to start the conversation.**\n` +
-        `_After starting, just type your question here._\n\n` +
+        `_After starting, mention me with your question (e.g. \`@bot who is Parrot?\`)._\n\n` +
         (question ? `**Your first question:** ${question.slice(0, 250)}` : 'Type `!end` anytime to stop.')
     )
     .setFooter({ text: 'UECBOT • Only you can start this chat' });
@@ -382,7 +382,7 @@ function buildChatStartedEmbed() {
     .setColor(0x57f287)
     .setTitle(`${E.verified} Chat Started`)
     .setDescription(
-      `Ask me anything about **Unstable SMP** - I will answer right here.\n\n` +
+      `Mention me with your question anytime, e.g. \`@bot who is Parrot?\`\n\n` +
         `${E.okay} Type \`!end\` whenever you want to stop.`
     );
 }
