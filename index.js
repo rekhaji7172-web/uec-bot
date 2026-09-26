@@ -199,7 +199,7 @@ async function answerQuestion(channel, session, question) {
       session.history.pop();
     }
     await channel
-      .send({ embeds: [AI.buildErrorEmbed()], allowedMentions: { parse: [] } })
+      .send({ embeds: [AI.buildErrorEmbed(err && err.message)], allowedMentions: { parse: [] } })
       .catch(() => {});
   }
 }

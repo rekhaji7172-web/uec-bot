@@ -3,10 +3,15 @@ const E = require('./emojis');
 
 const MODEL_PREFS = [
   'nvidia/nemotron-3-super-120b-a12b:free',
-  'openrouter/free',
+  'nvidia/nemotron-3.5-lightning:free',
+  'nvidia/nemotron-3-ultra-550b-a55b:free',
   'qwen/qwen3.8-27b:free',
   'google/gemma-4-31b-it:free',
+  'google/gemma-4-26b-a4b-it:free',
   'inclusionai/ling-3.0-flash-sante:free',
+  'inclusionai/ling-3.0-flash-fin:free',
+  'thinkingmachines/inkling:free',
+  'poolside/laguna-s-2.1:free',
 ];
 
 const GARBAGE = [
@@ -34,6 +39,8 @@ const pending = new Map();
 let redditCache = { at: 0, text: '' };
 let ytCache = { at: 0, text: '' };
 let channelIdCache = {};
+let freeModelCache = { at: 0, list: [] };
+let openrouterBlockedUntil = 0;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -152,9 +159,63 @@ function isGoodReply(text) {
   return !GARBAGE.some((re) => re.test(text));
 }
 
+async function getFreeModels() {
+  if (Date.now() - freeModelCache.at < 60 * 60 * 1000 && freeModelCache.list.length) {
+    return freeModelCache.list;
+  }
+  let list = [];
+  try {
+    const r = await fetchWithTimeout('https://openrouter.ai/api/v1/models', {}, 8000);
+    const j = await r.json();
+    list = (j.data || []).map((m) => m.id).filter((id) => id.endsWith(':free'));
+  } catch {
+    /* keep cache */
+  }
+  if (list.length) {
+    const set = new Set(list);
+    const ordered = [...MODEL_PREFS.filter((m) => set.has(m)), ...list.filter((m) => !MODEL_PREFS.includes(m))];
+    freeModelCache = { at: Date.now(), list: ordered };
+  }
+  return freeModelCache.list.length ? freeModelCache.list : MODEL_PREFS;
+}
+
+async function askGemini(messages) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return null;
+  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const system = messages[0].content;
+  const contents = messages.slice(1).map((m) => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }],
+  }));
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
+  const r = await fetchWithTimeout(
+    url,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents,
+        generationConfig: { maxOutputTokens: 800, temperature: 0.85 },
+      }),
+    },
+    45000
+  );
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    throw new Error((j.error && j.error.message) || `gemini HTTP ${r.status}`);
+  }
+  const parts = j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts;
+  const text = parts ? parts.map((p) => p.text || '').join('') : '';
+  if (!isGoodReply(text)) throw new Error('gemini gave an empty or low quality reply');
+  return text.length > MAX_REPLY ? text.slice(0, MAX_REPLY - 1) + '…' : text;
+}
+
 async function askAI(history, userMessage) {
   const key = process.env.OPENROUTER_API_KEY;
-  if (!key) throw new Error('OPENROUTER_API_KEY is not set');
+  const geminiKey = process.env.GEMINI_API_KEY;
+  if (!key && !geminiKey) throw new Error('OPENROUTER_API_KEY is not set');
 
   const [reddit, youtube] = await Promise.all([fetchReddit(), fetchYouTube()]);
   const messages = [{ role: 'system', content: buildSystemPrompt(reddit, youtube) }];
@@ -163,46 +224,100 @@ async function askAI(history, userMessage) {
   }
   messages.push({ role: 'user', content: String(userMessage).slice(0, 1500) });
 
-  const models = [...new Set([process.env.AI_MODEL, ...MODEL_PREFS].filter(Boolean))];
   let lastError = null;
 
-  for (const model of models) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const r = await fetchWithTimeout(
-          'https://openrouter.ai/api/v1/chat/completions',
-          {
-            method: 'POST',
-            headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model,
-              messages,
-              max_tokens: 700,
-              temperature: 0.85,
-            }),
-          },
-          45000
-        );
-        const j = await r.json().catch(() => ({}));
-        const text = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
-        const reply = text ? String(text).trim() : '';
-        if (isGoodReply(reply)) {
-          let out = reply;
-          if (out.length > MAX_REPLY) out = out.slice(0, MAX_REPLY - 1) + '…';
-          return out;
-        }
-        lastError = new Error(
-          (j.error && j.error.message) || (reply ? 'low quality reply' : `empty reply from ${model}`)
-        );
-        if (r.status === 429 || r.status === 403 || r.status === 404) break;
-        break;
-      } catch (e) {
-        lastError = e;
+  if (geminiKey) {
+    try {
+      const text = await askGemini(messages);
+      if (text) return text;
+    } catch (e) {
+      lastError = e;
+      if (/quota|resource.?exhausted|429/i.test(String(e.message))) {
+        await sleep(1000);
       }
-      await sleep(700);
+    }
+  }
+
+  if (!key) throw lastError || new Error('OPENROUTER_API_KEY is not set');
+
+  if (Date.now() < openrouterBlockedUntil) {
+    throw lastError || new Error('free-models-per-day limit reached (waiting for reset)');
+  }
+
+  const pref = (process.env.AI_MODEL || '').trim();
+  const pool = await getFreeModels();
+  const models = [...new Set([pref, ...pool].filter(Boolean))];
+  if (pref) {
+    const i = models.indexOf(pref);
+    if (i > 0) models.splice(i, 1), models.unshift(pref);
+  }
+
+  for (const model of models) {
+    let dailyLimitHit = false;
+    try {
+      const r = await fetchWithTimeout(
+        'https://openrouter.ai/api/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model, messages, max_tokens: 700, temperature: 0.85 }),
+        },
+        45000
+      );
+      const j = await r.json().catch(() => ({}));
+      const text = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+      const reply = text ? String(text).trim() : '';
+
+      if (r.ok && isGoodReply(reply)) {
+        return reply.length > MAX_REPLY ? reply.slice(0, MAX_REPLY - 1) + '…' : reply;
+      }
+
+      const msg = (j.error && j.error.message) || (reply ? 'low quality reply' : `empty reply from ${model}`);
+      lastError = new Error(msg);
+
+      if (/free-models-per-day/i.test(msg)) {
+        openrouterBlockedUntil = Date.now() + 30 * 60 * 1000;
+        dailyLimitHit = true;
+      }
+      if (dailyLimitHit) break;
+      if (r.status === 429) continue;
+    } catch (e) {
+      lastError = e;
+      await sleep(400);
     }
   }
   throw lastError || new Error('AI model unavailable');
+}
+
+function friendlyError(err) {
+  const msg = String((err && err.message) || err || '');
+  if (/free-models-per-day|waiting for reset/i.test(msg)) {
+    return {
+      color: 0xfee75c,
+      title: `${E.clock} Daily AI limit reached`,
+      desc:
+        `OpenRouter's free tier allows **100 AI messages/day**, and today's limit is used up. ` +
+        `It resets automatically within 24 hours.\n\n` +
+        `${E.rightarrow} **Quick fixes:**\n` +
+        `▸ Add $10 credit on [openrouter.ai](https://openrouter.ai/credits) → **1000 free requests/day**\n` +
+        `▸ Or set \`GEMINI_API_KEY\` (free from [aistudio.google.com](https://aistudio.google.com/apikey)) → much bigger free tier`,
+    };
+  }
+  if (/API_KEY is not set|api key is not set/i.test(msg)) {
+    return {
+      color: 0xed4245,
+      title: `${E.warning} AI not configured`,
+      desc: `Set \`OPENROUTER_API_KEY\` (and optionally \`GEMINI_API_KEY\`) in your hosting environment variables.`,
+    };
+  }
+  if (/rate.?limit|quota|429/i.test(msg)) {
+    return {
+      color: 0xfee75c,
+      title: `${E.clock} AI is rate limited`,
+      desc: `The AI provider is rate limiting right now. Try again in a minute or two.`,
+    };
+  }
+  return null;
 }
 
 const sessionKey = (channelId, userId) => `${channelId}:${userId}`;
@@ -279,11 +394,21 @@ function buildStopEmbed() {
     .setDescription('Your AI chat has been closed. Use `!ask` or `/ask` anytime to start again.');
 }
 
-function buildErrorEmbed() {
+function buildErrorEmbed(err) {
+  const friendly = friendlyError(err);
+  if (friendly) {
+    return new EmbedBuilder()
+      .setColor(friendly.color)
+      .setTitle(friendly.title)
+      .setDescription(friendly.desc)
+      .setFooter({ text: 'UECBOT' });
+  }
   return new EmbedBuilder()
     .setColor(0xed4245)
     .setTitle(`${E.warning} AI is busy`)
-    .setDescription('The AI did not respond right now. Please try again in a few seconds.');
+    .setDescription(
+      'The AI did not respond right now — this is usually a short temporary issue. Try again in a few seconds.'
+    );
 }
 
 const COLOR_MAIN = 0x5865f2;
