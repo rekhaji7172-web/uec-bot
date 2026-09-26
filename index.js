@@ -12,6 +12,7 @@ const {
   ApplicationCommandOptionType,
 } = require('discord.js');
 const { ALL_PACKS, searchPacks } = require('./scenepacks');
+const AFK = require('./afk');
 
 function loadEnv() {
   const file = path.join(__dirname, '.env');
@@ -47,20 +48,7 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-const E = {
-  document: '<a:document:1553319071024550019>',
-  view: '<a:view:1553320000243236914>',
-  verified: '<a:verified:1553319992542629888>',
-  click: '<a:click:1553318995166371870>',
-  rightarrow: '<a:rightarrow:1553319551855231009>',
-  search: '<a:search:1553319601335439410>',
-  warning: '<a:warning:1553320016005431327>',
-  menu: '<a:menu:1553319217342976070>',
-  handshake: '<a:handshake:1553319161743020135>',
-  rocket: '<a:rocket:1553319575318167563>',
-  clock: '<a:clock:1553319001713811516>',
-  okay: '<a:okay:1553319280312066068>',
-};
+const E = require('./emojis');
 
 const COLOR = 0x5865f2;
 const CREDITS = 'https://discord.gg/vnjyfqN688';
@@ -174,12 +162,53 @@ function resolve(query) {
 
 client.on('messageCreate', async (message) => {
   try {
-    if (message.author.bot) return;
-    if (!CHANNEL_IDS.has(message.channelId)) return;
-    const query = message.content.trim();
-    if (!query) return;
+    if (message.author.bot || !message.guild) return;
+    const content = message.content.trim();
 
-    const payload = resolve(query);
+    const afkCmd = content.match(/^!afk(?:\s+([\s\S]+))?$/i);
+    if (afkCmd) {
+      const reason = (afkCmd[1] || 'No reason provided').trim().slice(0, 300);
+      await AFK.setAfk(message.member, reason);
+      await message.channel.send({
+        embeds: [AFK.buildSetEmbed(message.member, reason)],
+        allowedMentions: { parse: [] },
+      });
+      return;
+    }
+
+    if (AFK.get(message.guild.id, message.author.id)) {
+      const data = await AFK.clearAfk(message.member);
+      await message.channel.send({
+        embeds: [AFK.buildReturnEmbed(message.member, data)],
+        allowedMentions: { users: [message.author.id] },
+      });
+    }
+
+    const mentioned = [...message.mentions.users.values()].filter(
+      (u) => !u.bot && u.id !== message.author.id
+    );
+    const afkMentioned = mentioned.filter((u) => AFK.get(message.guild.id, u.id));
+    if (afkMentioned.length) {
+      for (const u of afkMentioned) {
+        AFK.trackMention(message.guild.id, u.id, {
+          author: message.author.username,
+          content,
+          guildId: message.guild.id,
+          channelId: message.channel.id,
+          messageId: message.id,
+          time: Date.now(),
+        });
+      }
+      const embeds = afkMentioned.map((u) =>
+        AFK.buildPingEmbed(u, AFK.get(message.guild.id, u.id))
+      );
+      await message.channel.send({ embeds, allowedMentions: { parse: [] } });
+    }
+
+    if (!content) return;
+    if (!CHANNEL_IDS.has(message.channelId)) return;
+
+    const payload = resolve(content);
     if (!payload) return;
 
     await message.channel.send({

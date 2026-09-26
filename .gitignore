@@ -3,3 +3,4 @@ node_modules/
 bot.log
 bot.err
 bot.pid
+afk.json

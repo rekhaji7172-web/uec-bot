@@ -1,0 +1,18 @@
+module.exports = {
+  document: '<a:document:1553319071024550019>',
+  view: '<a:view:1553320000243236914>',
+  verified: '<a:verified:1553319992542629888>',
+  click: '<a:click:1553318995166371870>',
+  rightarrow: '<a:rightarrow:1553319551855231009>',
+  search: '<a:search:1553319601335439410>',
+  warning: '<a:warning:1553320016005431327>',
+  menu: '<a:menu:1553319217342976070>',
+  handshake: '<a:handshake:1553319161743020135>',
+  rocket: '<a:rocket:1553319575318167563>',
+  clock: '<a:clock:1553319001713811516>',
+  okay: '<a:okay:1553319280312066068>',
+  message: '<a:message:1553319223659339908>',
+  user: '<a:user:1553319980228157470>',
+  spy: '<a:spy:1553319789684850718>',
+  target: '<a:target:1553319863378776134>',
+};
