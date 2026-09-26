@@ -72,7 +72,81 @@ function viewsToNum(v) {
 
 function cleanViews(v) {
   if (!v) return null;
+  if (typeof v === 'number') return fmtViewsNum(v);
   return String(v).replace(/\s*views?$/i, '').trim();
+}
+
+function fmtViewsNum(n) {
+  if (n == null || isNaN(n)) return null;
+  if (n >= 1e9) return (n / 1e9).toFixed(n >= 1e10 ? 0 : 1).replace(/\.0$/, '') + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, '') + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(/\.0$/, '') + 'K';
+  return String(n);
+}
+
+function xmlUnescape(s) {
+  return String(s || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+function parseShorts(html) {
+  const segs = html.split('"shortsLockupViewModel":{').slice(1);
+  const out = [];
+  for (const seg of segs) {
+    const id =
+      one(seg, /"entityId":"shorts-shelf-item-([\w-]{11})"/) || one(seg, /"videoId":"([\w-]{11})"/);
+    if (!id || out.some((o) => o.id === id)) continue;
+    let title = null;
+    let views = null;
+    const acc = one(seg, /"accessibilityText":"((?:[^"\\]|\\.)*)"/);
+    if (acc) {
+      const text = jstr(acc);
+      const m = text.match(/^(.*),\s*([\d.,]+)\s*(thousand|million|billion)?\s*views?\s*[–-]\s*play Short\s*$/i);
+      if (m) {
+        title = m[1].trim();
+        let n = parseFloat(m[2].replace(/,/g, ''));
+        if (m[3]) n *= { thousand: 1e3, million: 1e6, billion: 1e9 }[m[3].toLowerCase()];
+        views = Math.round(n);
+      }
+    }
+    if (!title) title = jstr(one(seg, /"title":\{"content":"((?:[^"\\]|\\.)*)"/));
+    if (!title) continue;
+    out.push({ id, title, views });
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+
+async function fetchShortsList(handle, channelId) {
+  try {
+    const url = handle
+      ? `https://www.youtube.com/@${handle}/shorts`
+      : `https://www.youtube.com/channel/${channelId}/shorts`;
+    return parseShorts(await fetchText(url));
+  } catch {
+    return [];
+  }
+}
+
+async function fetchRssList(channelId) {
+  try {
+    const xml = await fetchText(`https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`);
+    return xml
+      .split('<entry>')
+      .slice(1, 15)
+      .map((e) => ({
+        id: one(e, /<yt:videoId>([\w-]{11})<\/yt:videoId>/),
+        title: xmlUnescape(one(e, /<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/) || '').trim(),
+        published: one(e, /<published>([^<]+)<\/published>/),
+      }))
+      .filter((x) => x.id);
+  } catch {
+    return [];
+  }
 }
 
 function resolveTarget(raw) {
@@ -267,7 +341,11 @@ async function getChannelStats(raw) {
   const videosUrl = channelId
     ? `https://www.youtube.com/channel/${channelId}/videos`
     : `https://www.youtube.com/@${handle}/videos`;
-  const videosHtml = await fetchText(videosUrl);
+  const [videosHtml, shorts, rss] = await Promise.all([
+    fetchText(videosUrl),
+    fetchShortsList(handle, channelId),
+    fetchRssList(channelId),
+  ]);
 
   let videoCount = ownVideoCount || pickVideoCount(about, subs);
   if (!videoCount) {
@@ -281,7 +359,27 @@ async function getChannelStats(raw) {
     const sorted = [...recent].sort((a, b) => viewsToNum(b.views) - viewsToNum(a.views));
     top = sorted.slice(0, 3);
   }
-  const latest = recent[0] || null;
+
+  let latest;
+  if (rss.length) {
+    const r0 = rss[0];
+    const sHit = shorts.find((x) => x.id === r0.id);
+    const lHit = recent.find((x) => x.id === r0.id);
+    latest = {
+      id: r0.id,
+      title: r0.title,
+      date: r0.published || null,
+      when: null,
+      views: sHit && sHit.views != null ? fmtViewsNum(sHit.views) : lHit ? lHit.views : null,
+      isShort: Boolean(sHit),
+    };
+  } else if (recent[0]) {
+    latest = { ...recent[0], date: null, isShort: false };
+  } else if (shorts[0]) {
+    latest = { ...shorts[0], date: null, when: null, isShort: true };
+  } else {
+    latest = null;
+  }
 
   const data = {
     name,
@@ -296,6 +394,7 @@ async function getChannelStats(raw) {
     videoCount: videoCount || null,
     latest,
     top: top || [],
+    shorts,
     sharedVideo,
     fetchedAt: Date.now(),
   };
@@ -307,12 +406,28 @@ async function getChannelStats(raw) {
 function videoLine(v) {
   const title = (v.title || 'Untitled').replace(/[[\]()`*_|]/g, '').slice(0, 70);
   const views = cleanViews(v.views);
-  const when = v.when ? ` • ${v.when}` : '';
-  return `[\`${title}\`](https://www.youtube.com/watch?v=${v.id})${views ? ` — **${views} views**${when}` : ''}`;
+  let when = v.when ? ` • ${v.when}` : '';
+  if (!when && v.date) {
+    const ms = Date.parse(v.date);
+    if (!isNaN(ms)) when = ` • <t:${Math.floor(ms / 1000)}:R>`;
+  }
+  const shortMark = v.isShort ? ` • **Short**` : '';
+  const url = v.isShort
+    ? `https://www.youtube.com/shorts/${v.id}`
+    : `https://www.youtube.com/watch?v=${v.id}`;
+  return `[\`${title}\`](${url})${views ? ` — **${views} views**` : ''}${when}${shortMark}`;
 }
 
 function buildChannelEmbed(s) {
-  const topOne = s.top && s.top[0];
+  const shorts = (s.shorts || []).filter((v) => v && v.id);
+  const shortsBest = shorts.reduce(
+    (a, b) => ((b.views || 0) > ((a && a.views) || 0) ? b : a),
+    null
+  );
+  let best = s.top && s.top[0] ? { ...s.top[0], isShort: false } : null;
+  if (shortsBest && (!best || viewsToNum(shortsBest.views) > viewsToNum(best.views))) {
+    best = { ...shortsBest, isShort: true };
+  }
 
   const embed = new EmbedBuilder()
     .setColor(COLOR_YT)
@@ -353,6 +468,15 @@ function buildChannelEmbed(s) {
     });
   }
 
+  if (shorts.length) {
+    const lines = shorts.slice(0, 3).map((v) => {
+      const title = String(v.title || 'Untitled').replace(/[[\]()`*_|]/g, '').slice(0, 70);
+      const views = v.views != null ? fmtViewsNum(v.views) : null;
+      return `> [\`${title}\`](https://www.youtube.com/shorts/${v.id})${views ? ` — **${views} views**` : ''}`;
+    });
+    embed.addFields({ name: `${E.message} Recent Shorts`, value: lines.join('\n'), inline: false });
+  }
+
   if (s.sharedVideo) {
     const v = s.sharedVideo;
     const title = String(v.title || 'Untitled').replace(/[[\]()`*_|]/g, '').slice(0, 70);
@@ -370,10 +494,10 @@ function buildChannelEmbed(s) {
     });
   }
 
-  if (topOne) {
+  if (best) {
     embed.addFields({
-      name: `${E.target} Most Viewed Video`,
-      value: videoLine(topOne),
+      name: best.isShort ? `${E.target} Most Viewed Short` : `${E.target} Most Viewed Video`,
+      value: videoLine(best),
       inline: false,
     });
   }
@@ -386,15 +510,23 @@ function buildChannelEmbed(s) {
       new ButtonBuilder()
         .setStyle(ButtonStyle.Link)
         .setLabel('Latest Video')
-        .setURL(`https://www.youtube.com/watch?v=${s.latest.id}`)
+        .setURL(
+          s.latest.isShort
+            ? `https://www.youtube.com/shorts/${s.latest.id}`
+            : `https://www.youtube.com/watch?v=${s.latest.id}`
+        )
     );
   }
-  if (s.top[0]) {
+  if (best) {
     row.addComponents(
       new ButtonBuilder()
         .setStyle(ButtonStyle.Link)
         .setLabel('Most Viewed')
-        .setURL(`https://www.youtube.com/watch?v=${s.top[0].id}`)
+        .setURL(
+          best.isShort
+            ? `https://www.youtube.com/shorts/${best.id}`
+            : `https://www.youtube.com/watch?v=${best.id}`
+        )
     );
   }
 
