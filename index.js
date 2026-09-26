@@ -14,6 +14,7 @@ const {
 const { ALL_PACKS, searchPacks } = require('./scenepacks');
 const AFK = require('./afk');
 const AI = require('./ai');
+const STATS = require('./stats');
 
 function loadEnv() {
   const file = path.join(__dirname, '.env');
@@ -175,6 +176,16 @@ function stripMentions(text) {
   return text.replace(/<@!?\d+>/g, '').replace(/\s+/g, ' ').trim();
 }
 
+async function sendChannelStats(channel, arg) {
+  await channel.sendTyping().catch(() => {});
+  try {
+    const data = await STATS.getChannelStats(arg);
+    await channel.send({ ...STATS.buildChannelEmbed(data), allowedMentions: { parse: [] } });
+  } catch (err) {
+    await channel.send({ embeds: [STATS.buildErrorEmbed(err.message)] }).catch(() => {});
+  }
+}
+
 async function answerQuestion(channel, session, question) {
   AI.pushHistory(session, 'user', question);
   try {
@@ -259,6 +270,28 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+    if (/^!help$/i.test(content)) {
+      await message.channel.send({ embeds: [STATS.buildHelpEmbed()] });
+      return;
+    }
+
+    const statsCmd = content.match(/^!stats(?:\s+([\s\S]+))?$/i);
+    if (statsCmd) {
+      const arg = (statsCmd[1] || '').trim();
+      if (!arg) {
+        await message.channel.send({ embeds: [STATS.buildServerEmbed(message.guild, client)] });
+        return;
+      }
+      await sendChannelStats(message.channel, arg);
+      return;
+    }
+
+    const ytLink = content.match(/^(https?:\/\/)?(www\.)?(youtube\.com\/\S+|youtu\.be\/\S+)$/i);
+    if (ytLink) {
+      await sendChannelStats(message.channel, content);
+      return;
+    }
+
     const session = AI.getSession(message.channelId, message.author.id);
     const mentionsBot = Boolean(client.user && message.mentions.has(client.user));
 
@@ -320,6 +353,22 @@ const COMMANDS = [
       },
     ],
   },
+  {
+    name: 'stats',
+    description: 'Server stats, or full analysis of a YouTube channel link',
+    options: [
+      {
+        type: ApplicationCommandOptionType.String,
+        name: 'url',
+        description: 'YouTube channel link or @handle (empty = server stats)',
+        required: false,
+      },
+    ],
+  },
+  {
+    name: 'help',
+    description: 'List all UECBOT commands',
+  },
 ];
 
 client.on('interactionCreate', async (interaction) => {
@@ -348,6 +397,27 @@ client.on('interactionCreate', async (interaction) => {
         fetchReply: true,
       });
       if (question) AI.setPending(startMsg.id, question);
+      return;
+    }
+
+    if (interaction.isChatInputCommand() && interaction.commandName === 'stats') {
+      const url = (interaction.options.getString('url') || '').trim();
+      if (!url) {
+        await interaction.reply({ embeds: [STATS.buildServerEmbed(interaction.guild, client)] });
+        return;
+      }
+      await interaction.deferReply();
+      try {
+        const data = await STATS.getChannelStats(url);
+        await interaction.editReply(STATS.buildChannelEmbed(data));
+      } catch (err) {
+        await interaction.editReply({ embeds: [STATS.buildErrorEmbed(err.message)] });
+      }
+      return;
+    }
+
+    if (interaction.isChatInputCommand() && interaction.commandName === 'help') {
+      await interaction.reply({ embeds: [STATS.buildHelpEmbed()] });
       return;
     }
 
