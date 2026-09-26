@@ -13,6 +13,7 @@ const {
 } = require('discord.js');
 const { ALL_PACKS, searchPacks } = require('./scenepacks');
 const AFK = require('./afk');
+const AI = require('./ai');
 
 function loadEnv() {
   const file = path.join(__dirname, '.env');
@@ -160,6 +161,38 @@ function resolve(query) {
   return { embeds: [noneEmbed(query)], components: [], ephemeral: true };
 }
 
+function startRow(userId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`ai_start:${userId}`)
+      .setLabel('Start Chat')
+      .setEmoji(E.click)
+      .setStyle(ButtonStyle.Success)
+  );
+}
+
+function stripMentions(text) {
+  return text.replace(/<@!?\d+>/g, '').replace(/\s+/g, ' ').trim();
+}
+
+async function answerQuestion(channel, session, question) {
+  AI.pushHistory(session, 'user', question);
+  try {
+    await channel.sendTyping();
+    const reply = await AI.askAI(session.history, question);
+    AI.pushHistory(session, 'assistant', reply);
+    await channel.send({ content: reply, allowedMentions: { parse: [] } });
+  } catch (err) {
+    console.error('[ai]', (err && err.message) || err);
+    if (session.history.length && session.history[session.history.length - 1].role === 'user') {
+      session.history.pop();
+    }
+    await channel
+      .send({ embeds: [AI.buildErrorEmbed()], allowedMentions: { parse: [] } })
+      .catch(() => {});
+  }
+}
+
 client.on('messageCreate', async (message) => {
   try {
     if (message.author.bot || !message.guild) return;
@@ -206,6 +239,47 @@ client.on('messageCreate', async (message) => {
     }
 
     if (!content) return;
+
+    const askCmd = content.match(/^!ask(?:\s+([\s\S]+))?$/i);
+    if (askCmd) {
+      const question = (askCmd[1] || '').trim();
+      const startMsg = await message.channel.send({
+        embeds: [AI.buildStartEmbed(question)],
+        components: [startRow(message.author.id)],
+        allowedMentions: { parse: [] },
+      });
+      if (question) AI.setPending(startMsg.id, question);
+      return;
+    }
+
+    if (/^!end$/i.test(content)) {
+      if (AI.endSession(message.channelId, message.author.id)) {
+        await message.channel.send({ embeds: [AI.buildStopEmbed()], allowedMentions: { parse: [] } });
+      }
+      return;
+    }
+
+    const session = AI.getSession(message.channelId, message.author.id);
+    const mentionsBot = Boolean(client.user && message.mentions.has(client.user));
+
+    if (session && !content.startsWith('!')) {
+      if (AI.onCooldown(session)) return;
+      const question = (mentionsBot ? stripMentions(content) : content) || content;
+      await answerQuestion(message.channel, session, question);
+      return;
+    }
+
+    if (mentionsBot) {
+      const question = stripMentions(content);
+      const startMsg = await message.channel.send({
+        embeds: [AI.buildStartEmbed(question)],
+        components: [startRow(message.author.id)],
+        allowedMentions: { parse: [] },
+      });
+      if (question) AI.setPending(startMsg.id, question);
+      return;
+    }
+
     if (!CHANNEL_IDS.has(message.channelId)) return;
 
     const payload = resolve(content);
@@ -234,6 +308,18 @@ const COMMANDS = [
       },
     ],
   },
+  {
+    name: 'ask',
+    description: 'Chat with the Unstable SMP AI (click Start Chat to begin)',
+    options: [
+      {
+        type: ApplicationCommandOptionType.String,
+        name: 'question',
+        description: 'Optional first question for the AI',
+        required: false,
+      },
+    ],
+  },
 ];
 
 client.on('interactionCreate', async (interaction) => {
@@ -251,6 +337,40 @@ client.on('interactionCreate', async (interaction) => {
       const query = interaction.options.getString('name', true);
       const payload = resolve(query) || { embeds: [noneEmbed(query)], components: [], ephemeral: true };
       await interaction.reply({ ...payload, ephemeral: Boolean(payload.ephemeral) });
+      return;
+    }
+
+    if (interaction.isChatInputCommand() && interaction.commandName === 'ask') {
+      const question = (interaction.options.getString('question') || '').trim();
+      const startMsg = await interaction.reply({
+        embeds: [AI.buildStartEmbed(question)],
+        components: [startRow(interaction.user.id)],
+        fetchReply: true,
+      });
+      if (question) AI.setPending(startMsg.id, question);
+      return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('ai_start:')) {
+      const owner = interaction.customId.split(':')[1];
+      if (interaction.user.id !== owner) {
+        await interaction.reply({
+          content: 'This button is not for you — use `/ask` or `!ask` to start your own chat.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      let session = AI.getSession(interaction.channelId, interaction.user.id);
+      const already = Boolean(session);
+      if (!session) session = AI.startSession(interaction.channelId, interaction.user.id);
+
+      const question = already ? null : AI.takePending(interaction.message.id);
+      await interaction.update({ embeds: [AI.buildChatStartedEmbed()], components: [] });
+
+      if (question) {
+        await answerQuestion(interaction.channel, session, question);
+      }
     }
   } catch (err) {
     console.error('[interactionCreate]', err);
@@ -265,6 +385,9 @@ client.on('interactionCreate', async (interaction) => {
 client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   console.log(`Scenepack channels: ${[...CHANNEL_IDS].join(', ')}`);
+  if (!process.env.OPENROUTER_API_KEY) {
+    console.warn('[warn] OPENROUTER_API_KEY not set - /ask AI will not work until you add it.');
+  }
   try {
     const rest = new REST().setToken(TOKEN);
     const guilds = await rest.get(Routes.userGuilds());
