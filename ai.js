@@ -212,13 +212,17 @@ async function askGemini(messages) {
   return text.length > MAX_REPLY ? text.slice(0, MAX_REPLY - 1) + '…' : text;
 }
 
-async function askAI(history, userMessage) {
+async function askAI(history, userMessage, systemOverride) {
   const key = process.env.OPENROUTER_API_KEY;
   const geminiKey = process.env.GEMINI_API_KEY;
   if (!key && !geminiKey) throw new Error('OPENROUTER_API_KEY is not set');
 
-  const [reddit, youtube] = await Promise.all([fetchReddit(), fetchYouTube()]);
-  const messages = [{ role: 'system', content: buildSystemPrompt(reddit, youtube) }];
+  let sys = systemOverride;
+  if (!sys) {
+    const [reddit, youtube] = await Promise.all([fetchReddit(), fetchYouTube()]);
+    sys = buildSystemPrompt(reddit, youtube);
+  }
+  const messages = [{ role: 'system', content: sys }];
   for (const h of history.slice(-HISTORY_LIMIT)) {
     messages.push({ role: h.role, content: String(h.content).slice(0, HISTORY_CHAR) });
   }
