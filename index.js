@@ -212,9 +212,9 @@ client.on('messageCreate', async (message) => {
     const afkCmd = content.match(/^!afk(?:\s+([\s\S]+))?$/i);
     if (afkCmd) {
       const reason = (afkCmd[1] || 'No reason provided').trim().slice(0, 300);
-      await AFK.setAfk(message.member, reason);
+      const data = await AFK.setAfk(message.member, reason);
       await message.channel.send({
-        embeds: [AFK.buildSetEmbed(message.member, reason)],
+        embeds: [AFK.buildSetEmbed(message.member, reason, data)],
         allowedMentions: { parse: [] },
       });
       return;

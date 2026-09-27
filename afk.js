@@ -17,7 +17,9 @@ try {
 
 function save() {
   try {
-    fs.writeFileSync(FILE, JSON.stringify(state, null, 2));
+    const tmp = FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+    fs.renameSync(tmp, FILE);
   } catch {}
 }
 
@@ -62,8 +64,10 @@ async function setAfk(member, reason) {
   let nickChanged = false;
   let originalNick = null;
   try {
-    originalNick = member.nickname;
-    const base = member.nickname || member.user.displayName || member.user.username;
+    const raw = member.nickname;
+    originalNick =
+      raw && raw.startsWith(NICK_PREFIX) ? raw.slice(NICK_PREFIX.length).trim() || null : raw;
+    const base = originalNick || member.user.displayName || member.user.username;
     let next = NICK_PREFIX + base;
     if (next.length > 32) next = next.slice(0, 32);
     await member.setNickname(next);
@@ -87,9 +91,16 @@ async function clearAfk(member) {
   const data = get(guildId, userId);
   del(guildId, userId);
   if (data && data.nickChanged) {
+    const target = data.nick || null;
     try {
-      await member.setNickname(data.nick || null);
-    } catch {}
+      await member.setNickname(target);
+    } catch {
+      setTimeout(() => {
+        try {
+          member.setNickname(target).catch(() => {});
+        } catch {}
+      }, 4000);
+    }
   }
   return data;
 }
@@ -102,15 +113,19 @@ function timeAgo(ts) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
-function buildSetEmbed(member, reason) {
+function buildSetEmbed(member, reason, data) {
+  const nickLine =
+    data && data.nickChanged
+      ? `**Nickname:** \`[AFK] ${data.nick || member.user.displayName || member.user.username}\`\n`
+      : `**Nickname:** ⚠️ _not changed — the bot needs the **Manage Nicknames** permission (AFK alerts still work)_\n`;
   return new EmbedBuilder()
     .setColor(0xfee75c)
     .setTitle(`${E.clock} AFK Enabled`)
     .setDescription(
       `${E.user} **${member.user.username}** is now AFK.\n` +
         `**Reason:** ${reason}\n` +
-        `**Nickname:** \`[AFK] ${member.nickname || member.user.displayName || member.user.username}\`\n\n` +
-        `_Your AFK will be removed automatically when you send a message._`
+        nickLine +
+        `\n_Your AFK will be removed automatically when you send a message._`
     )
     .setFooter({ text: 'UECBOT • Use !afk <reason> to update your reason' });
 }
