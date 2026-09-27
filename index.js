@@ -286,12 +286,6 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    const ytLink = content.match(/^(https?:\/\/)?(www\.)?(youtube\.com\/\S+|youtu\.be\/\S+)$/i);
-    if (ytLink) {
-      await sendChannelStats(message.channel, content);
-      return;
-    }
-
     const session = AI.getSession(message.channelId, message.author.id);
     const mentionsBot = Boolean(client.user && message.mentions.has(client.user));
 
@@ -315,6 +309,7 @@ client.on('messageCreate', async (message) => {
     }
 
     if (!CHANNEL_IDS.has(message.channelId)) return;
+    if (/https?:\/\//i.test(content)) return;
 
     const payload = resolve(content);
     if (!payload) return;
