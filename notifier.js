@@ -267,6 +267,12 @@ const COMMANDS = [
       },
       {
         type: ApplicationCommandOptionType.String,
+        name: 'chid',
+        description: 'Channel ID — use if your target channel is hidden from you (shows all channels)',
+        autocomplete: true,
+      },
+      {
+        type: ApplicationCommandOptionType.String,
         name: 'mention',
         description: 'Who to ping when a video drops (default: @everyone + @here)',
         choices: [
@@ -354,6 +360,21 @@ async function handleInteraction(interaction) {
 
   if (interaction.isAutocomplete()) {
     const focused = String(interaction.options.getFocused() || '').toLowerCase();
+
+    if (interaction.commandName === 'addnotifier') {
+      const all = interaction.guild ? [...interaction.guild.channels.cache.values()] : [];
+      const choices = all
+        .filter(
+          (c) =>
+            (c.type === ChannelType.GuildText || c.type === ChannelType.GuildAnnouncement) &&
+            (!focused || c.name.toLowerCase().includes(focused) || c.id.startsWith(focused))
+        )
+        .slice(0, 25)
+        .map((c) => ({ name: `#${c.name}`.slice(0, 100), value: c.id }));
+      await interaction.respond(choices).catch(() => {});
+      return true;
+    }
+
     const nameOf = (id) => {
       const ch = interaction.client.channels.cache.get(id);
       return ch ? ch.name : '?';
@@ -380,14 +401,19 @@ async function handleInteraction(interaction) {
       const raw = interaction.options.getString('url', true);
       const mention = interaction.options.getString('mention') || 'both';
       const picked = interaction.options.getChannel('channel');
-      const wantedId = (picked && picked.id) || (interaction.channel && interaction.channel.id);
+      const chidRaw = interaction.options.getString('chid');
+      let wantedId = chidRaw ? String(chidRaw).replace(/\D/g, '') : '';
+      if (!wantedId) wantedId = (picked && picked.id) || (interaction.channel && interaction.channel.id);
       if (!interaction.guild) throw new Error('Use this command inside a server.');
       if (!wantedId) {
         throw new Error("I can't access this channel — use the `channel` option to pick one I can post in.");
       }
       const target = await interaction.client.channels.fetch(wantedId).catch(() => null);
       if (!target) {
-        throw new Error(`I can't access <#${wantedId}> — make sure I can view that channel, or pick another.`);
+        throw new Error(`I can't access <#${wantedId}> — make sure that channel ID is correct, or pick another.`);
+      }
+      if (target.guildId && target.guildId !== interaction.guildId) {
+        throw new Error('That channel is in a different server — run this command there instead.');
       }
       if (target.type !== ChannelType.GuildText && target.type !== ChannelType.GuildAnnouncement) {
         throw new Error('Pick a text or announcement channel for notifications.');
