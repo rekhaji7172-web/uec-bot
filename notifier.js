@@ -153,10 +153,25 @@ function buildVideoEmbed(item, video, channelTitle) {
     .setFooter({ text: 'YouTube Notifier' });
 }
 
+async function pauseAfterFails(client, item) {
+  item.enabled = false;
+  console.error(`[notifier #${item.id}] auto-paused after ${MAX_FAILS} failures`);
+  client.users
+    .fetch(OWNER_ID)
+    .then((u) =>
+      u.send(
+        `${E.warning} Notifier #${item.id} (${item.ytTitle}) was auto-paused — it failed to post ${MAX_FAILS} times. Fix the channel and resume it with \`/pausenotifier\`.`
+      )
+    )
+    .catch(() => {});
+}
+
 async function postVideo(client, item, video, channelTitle) {
   const ch = await client.channels.fetch(item.targetId).catch(() => null);
   if (!ch) {
-    console.warn(`[notifier #${item.id}] target channel not found`);
+    item.fails = (item.fails || 0) + 1;
+    console.warn(`[notifier #${item.id}] cannot access channel ${item.targetId} (${item.fails}/${MAX_FAILS})`);
+    if (item.fails >= MAX_FAILS && item.enabled) await pauseAfterFails(client, item);
     return false;
   }
   try {
@@ -170,18 +185,7 @@ async function postVideo(client, item, video, channelTitle) {
   } catch (err) {
     item.fails = (item.fails || 0) + 1;
     console.error(`[notifier #${item.id}] send failed (${item.fails}/${MAX_FAILS}):`, err.message);
-    if (item.fails >= MAX_FAILS && item.enabled) {
-      item.enabled = false;
-      console.error(`[notifier #${item.id}] auto-paused after ${MAX_FAILS} failures`);
-      client.users
-        .fetch(OWNER_ID)
-        .then((u) =>
-          u.send(
-            `${E.warning} Notifier #${item.id} (${item.ytTitle}) was auto-paused — it failed to post ${MAX_FAILS} times. Fix the channel and resume it with \`/pausenotifier\`.`
-          )
-        )
-        .catch(() => {});
-    }
+    if (item.fails >= MAX_FAILS && item.enabled) await pauseAfterFails(client, item);
     return false;
   }
 }
@@ -375,15 +379,25 @@ async function handleInteraction(interaction) {
       await interaction.deferReply({ ephemeral: true });
       const raw = interaction.options.getString('url', true);
       const mention = interaction.options.getString('mention') || 'both';
-      const target = interaction.options.getChannel('channel') || interaction.channel;
+      const picked = interaction.options.getChannel('channel');
+      const wantedId = (picked && picked.id) || (interaction.channel && interaction.channel.id);
       if (!interaction.guild) throw new Error('Use this command inside a server.');
+      if (!wantedId) {
+        throw new Error("I can't access this channel — use the `channel` option to pick one I can post in.");
+      }
+      const target = await interaction.client.channels.fetch(wantedId).catch(() => null);
+      if (!target) {
+        throw new Error(`I can't access <#${wantedId}> — make sure I can view that channel, or pick another.`);
+      }
       if (target.type !== ChannelType.GuildText && target.type !== ChannelType.GuildAnnouncement) {
         throw new Error('Pick a text or announcement channel for notifications.');
       }
       const me = interaction.guild.members.me;
       const perms = target.permissionsFor(me);
-      if (perms && !perms.has('SendMessages')) {
-        throw new Error(`I can't send messages in <#${target.id}> — fix my permissions there first.`);
+      if (perms && (!perms.has('ViewChannel') || !perms.has('SendMessages'))) {
+        throw new Error(
+          `I can't post in <#${target.id}> — I need **View Channel** and **Send Messages** there. Fix my permissions or pick another channel.`
+        );
       }
       const { channelId, channelTitle } = await resolveYouTube(raw);
       const feed = await fetchFeed(channelId);
