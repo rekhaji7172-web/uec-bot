@@ -860,12 +860,8 @@ function buildHelpEmbed() {
         '▸ `!stats <youtube link>` — full channel analysis',
         '▸ `/stats [url]` — slash version',
         '',
-        `${E.verified} **Fact Check**`,
-        '▸ `!fc <claim>` or `!factcheck <claim>` — AI fact check',
-        '▸ Example: `!fc the earth is flat`',
-        '',
         `${E.okay} **Other**`,
-        '▸ `!help` or `!h` — this list',
+        '▸ `!help` — this list',
       ].join('\n')
     )
     .setFooter({ text: `UECBOT • Credits: discord.gg/vnjyfqN688` });
@@ -877,4 +873,8 @@ module.exports = {
   buildErrorEmbed,
   buildServerEmbed,
   buildHelpEmbed,
+  resolveTarget,
+  fetchText,
+  ytKey,
+  ytApi,
 };

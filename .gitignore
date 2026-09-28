@@ -4,3 +4,4 @@ bot.log
 bot.err
 bot.pid
 afk.json
+notifiers.json

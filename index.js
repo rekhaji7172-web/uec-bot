@@ -15,6 +15,7 @@ const { ALL_PACKS, searchPacks } = require('./scenepacks');
 const AFK = require('./afk');
 const AI = require('./ai');
 const STATS = require('./stats');
+const NOTIFIER = require('./notifier');
 
 function loadEnv() {
   const file = path.join(__dirname, '.env');
@@ -53,16 +54,6 @@ if (!TOKEN) {
 const E = require('./emojis');
 
 const COLOR = 0x5865f2;
-
-const FC_COOLDOWN = new Map();
-
-const FACTCHECK_PROMPT = [
-  'You are a fact-check assistant. The user gives you a claim. Reply in plain text (no markdown headers) with:',
-  '1. First line: a verdict — one of: TRUE / FALSE / MOSTLY FALSE / PARTLY TRUE / UNVERIFIABLE (pick the closest, keep it short).',
-  '2. Then 2-4 short bullet points (starting with "- ") giving the key evidence or reasoning.',
-  '3. Last line: "Bottom line: " followed by one short sentence.',
-  'Be accurate and neutral. If the claim is an opinion or not checkable, say UNVERIFIABLE and explain briefly. Keep the whole reply under 700 characters.',
-].join('\n');
 const CREDITS = 'https://discord.gg/vnjyfqN688';
 const CREDITS_LINE = `${E.handshake} **Credits:** [Discord Server](${CREDITS})`;
 
@@ -280,62 +271,8 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    if (/^!(?:help|h|cmds|commands|menu)$/i.test(content)) {
+    if (/^!help$/i.test(content)) {
       await message.channel.send({ embeds: [STATS.buildHelpEmbed()] });
-      return;
-    }
-
-    const fcCmd = content.match(/^!(?:factcheck|fact\s?check|fc)(?:\s+([\s\S]+))?$/i);
-    if (fcCmd) {
-      const claim = (fcCmd[1] || '').trim().slice(0, 500);
-      if (!claim) {
-        await message.channel.send({
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0x5865f2)
-              .setTitle(`${E.warning} Fact Check — missing claim`)
-              .setDescription('Usage: `!fc <claim>`\nExample: `!fc the earth is flat`')
-              .setFooter({ text: 'UECBOT' }),
-          ],
-          allowedMentions: { parse: [] },
-        });
-        return;
-      }
-      const last = FC_COOLDOWN.get(message.author.id) || 0;
-      if (Date.now() - last < 5000) {
-        await message.channel.send({
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0xfee75c)
-              .setTitle(`${E.clock} Hold on...`)
-              .setDescription('Wait a few seconds before the next fact check.')
-              .setFooter({ text: 'UECBOT' }),
-          ],
-          allowedMentions: { parse: [] },
-        });
-        return;
-      }
-      FC_COOLDOWN.set(message.author.id, Date.now());
-      await message.channel.sendTyping().catch(() => {});
-      try {
-        const reply = await AI.askAI([], claim, FACTCHECK_PROMPT);
-        await message.channel.send({
-          embeds: [
-            new EmbedBuilder()
-              .setColor(0x5865f2)
-              .setTitle(`${E.verified} Fact Check`)
-              .setDescription(`**Claim:** ${claim.slice(0, 300)}\n\n${reply}`.slice(0, 4096))
-              .setFooter({ text: 'UECBOT • AI-powered fact check' })
-              .setTimestamp(),
-          ],
-          allowedMentions: { parse: [] },
-        });
-      } catch (err) {
-        console.error('[fc]', (err && err.message) || err);
-        await message.channel
-          .send({ embeds: [AI.buildErrorEmbed(err && err.message)], allowedMentions: { parse: [] } })
-          .catch(() => {});
-      }
       return;
     }
 
@@ -429,10 +366,13 @@ const COMMANDS = [
     name: 'help',
     description: 'List all UECBOT commands',
   },
+  ...NOTIFIER.COMMANDS,
 ];
 
 client.on('interactionCreate', async (interaction) => {
   try {
+    if (await NOTIFIER.handleInteraction(interaction)) return;
+
     if (interaction.isAutocomplete()) {
       const focused = (interaction.options.getFocused() || '').toLowerCase();
       const choices = ALL_PACKS.filter((p) => p.name.toLowerCase().includes(focused))
@@ -543,6 +483,7 @@ client.once('clientReady', async () => {
       console.error('[commands]', err);
     }
   }
+  NOTIFIER.start(client);
 });
 
 client.login(TOKEN).catch((err) => {
