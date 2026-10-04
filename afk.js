@@ -7,6 +7,7 @@ const FILE = path.join(__dirname, 'afk.json');
 const MAX_MENTIONS = 15;
 const MAX_SHOWN = 10;
 const NICK_PREFIX = '[AFK] ';
+const PLAIN_CHANNEL_ID = '1508053499307360417';
 
 let state = {};
 try {
@@ -170,6 +171,65 @@ function buildPingEmbed(user, data) {
     );
 }
 
+function isPlain(channelId) {
+  return String(channelId) === PLAIN_CHANNEL_ID;
+}
+
+function buildSetMessage(member, reason, data) {
+  const nick =
+    data && data.nickChanged
+      ? `_Nickname \`${NICK_PREFIX}${data.nick || member.user.displayName || member.user.username}\` · auto-clears when you talk_`
+      : '_Nickname not changed — I need **Manage Nicknames** (alerts still work)_';
+  return `${E.clock} **AFK on** — ${member.user.username}\n**Reason:** ${reason}\n${nick}`;
+}
+
+function buildReturnMessage(member, data) {
+  let out =
+    `${E.okay} **AFK off** — welcome back, ${member.user.username}!\n` +
+    `**Was:** ${data ? data.reason : 'unknown'} · AFK ${data ? timeAgo(data.since) : 'unknown'}`;
+  const mentions = (data && data.mentions) || [];
+  if (mentions.length) {
+    const shown = mentions.slice(-3);
+    const lines = shown.map((m) => {
+      const link = `https://discord.com/channels/${m.guildId}/${m.channelId}/${m.messageId}`;
+      const text = m.content.length > 80 ? m.content.slice(0, 80) + '…' : m.content;
+      return `**${m.author}** — [jump](${link})\n> ${text}`;
+    });
+    const extra = mentions.length - shown.length;
+    out +=
+      `\n${E.message} **Missed you (${mentions.length}):**\n` +
+      lines.join('\n') +
+      (extra > 0 ? `\n_+${extra} more_` : '');
+  }
+  return out;
+}
+
+function buildPingMessage(user, data) {
+  return (
+    `${E.warning} **${user.username} is AFK** · ${timeAgo(data.since)}\n` +
+    `> ${data.reason}\n` +
+    `_They'll see your message when they return._`
+  );
+}
+
+function setPayload(channelId, member, reason, data) {
+  return isPlain(channelId)
+    ? { content: buildSetMessage(member, reason, data) }
+    : { embeds: [buildSetEmbed(member, reason, data)] };
+}
+
+function returnPayload(channelId, member, data) {
+  return isPlain(channelId)
+    ? { content: buildReturnMessage(member, data) }
+    : { embeds: [buildReturnEmbed(member, data)] };
+}
+
+function pingPayload(channelId, pairs) {
+  return isPlain(channelId)
+    ? { content: pairs.map(([u, d]) => buildPingMessage(u, d)).join('\n\n') }
+    : { embeds: pairs.map(([u, d]) => buildPingEmbed(u, d)) };
+}
+
 module.exports = {
   get,
   setAfk,
@@ -178,5 +238,9 @@ module.exports = {
   buildSetEmbed,
   buildReturnEmbed,
   buildPingEmbed,
+  isPlain,
+  setPayload,
+  returnPayload,
+  pingPayload,
   NICK_PREFIX,
 };

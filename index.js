@@ -215,7 +215,7 @@ client.on('messageCreate', async (message) => {
       const reason = (afkCmd[1] || 'No reason provided').trim().slice(0, 300);
       const data = await AFK.setAfk(message.member, reason);
       await message.channel.send({
-        embeds: [AFK.buildSetEmbed(message.member, reason, data)],
+        ...AFK.setPayload(message.channelId, message.member, reason, data),
         allowedMentions: { parse: [] },
       });
       return;
@@ -224,7 +224,7 @@ client.on('messageCreate', async (message) => {
     if (AFK.get(message.guild.id, message.author.id)) {
       const data = await AFK.clearAfk(message.member);
       await message.channel.send({
-        embeds: [AFK.buildReturnEmbed(message.member, data)],
+        ...AFK.returnPayload(message.channelId, message.member, data),
         allowedMentions: { users: [message.author.id] },
       });
     }
@@ -244,10 +244,11 @@ client.on('messageCreate', async (message) => {
           time: Date.now(),
         });
       }
-      const embeds = afkMentioned.map((u) =>
-        AFK.buildPingEmbed(u, AFK.get(message.guild.id, u.id))
-      );
-      await message.channel.send({ embeds, allowedMentions: { parse: [] } });
+      const pairs = afkMentioned.map((u) => [u, AFK.get(message.guild.id, u.id)]);
+      await message.channel.send({
+        ...AFK.pingPayload(message.channelId, pairs),
+        allowedMentions: { parse: [] },
+      });
     }
 
     if (!content) return;
