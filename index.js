@@ -215,7 +215,7 @@ client.on('messageCreate', async (message) => {
       const reason = (afkCmd[1] || 'No reason provided').trim().slice(0, 300);
       const data = await AFK.setAfk(message.member, reason);
       await message.channel.send({
-        ...AFK.setPayload(message.channelId, message.member, reason, data),
+        ...AFK.setPayload(message.guild.id, message.channelId, message.member, reason, data),
         allowedMentions: { parse: [] },
       });
       return;
@@ -224,7 +224,7 @@ client.on('messageCreate', async (message) => {
     if (AFK.get(message.guild.id, message.author.id)) {
       const data = await AFK.clearAfk(message.member);
       await message.channel.send({
-        ...AFK.returnPayload(message.channelId, message.member, data),
+        ...AFK.returnPayload(message.guild.id, message.channelId, message.member, data),
         allowedMentions: { users: [message.author.id] },
       });
     }
@@ -246,12 +246,79 @@ client.on('messageCreate', async (message) => {
       }
       const pairs = afkMentioned.map((u) => [u, AFK.get(message.guild.id, u.id)]);
       await message.channel.send({
-        ...AFK.pingPayload(message.channelId, pairs),
+        ...AFK.pingPayload(message.guild.id, message.channelId, pairs),
         allowedMentions: { parse: [] },
       });
     }
 
     if (!content) return;
+
+    const styleCmd = content.match(/^!afkstyle(?:\s+([\s\S]+))?$/i);
+    if (styleCmd) {
+      const memberPerms = message.member && message.member.permissions;
+      if (!memberPerms || (!memberPerms.has('ManageGuild') && !memberPerms.has('Administrator'))) {
+        await message.channel.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xed4245)
+              .setTitle(`${E.warning} Admins only`)
+              .setDescription('Only server admins can change the AFK message style.')
+              .setFooter({ text: 'UECBOT' }),
+          ],
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+      const arg = (styleCmd[1] || '').trim().toLowerCase();
+      const stateMatch = arg.match(/\b(on|off|plain|embed|enable|disable|enabled|disabled)\b/);
+      const targetChannel = message.mentions.channels.first() || message.channel;
+      if (targetChannel.type !== 0 && targetChannel.type !== 5) {
+        await message.channel.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xfee75c)
+              .setTitle(`${E.warning} Wrong channel type`)
+              .setDescription('Pick a text or announcement channel.')
+              .setFooter({ text: 'UECBOT' }),
+          ],
+          allowedMentions: { parse: [] },
+        });
+        return;
+      }
+      let next;
+      if (stateMatch) {
+        const w = stateMatch[1];
+        const wantPlain = ['on', 'plain', 'enable', 'enabled'].includes(w);
+        next = AFK.setPlain(message.guild.id, targetChannel.id, wantPlain);
+      } else {
+        next = AFK.togglePlain(message.guild.id, targetChannel.id);
+      }
+      const chRef =
+        targetChannel.id === message.channel.id ? 'this channel' : `<#${targetChannel.id}>`;
+      if (next) {
+        await message.channel.send({
+          content:
+            `${E.click} **AFK style → plain** — AFK messages in ${chRef} will be short formatted text now.\n` +
+            `_Toggle back: \`!afkstyle off\` · other channel: \`!afkstyle off #channel\`_`,
+          allowedMentions: { parse: [] },
+        });
+      } else {
+        await message.channel.send({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0x57f287)
+              .setTitle(`${E.click} AFK style → embeds`)
+              .setDescription(
+                `AFK messages in ${chRef} will use embeds again.\n` +
+                  `_Toggle: \`!afkstyle on\` · other channel: \`!afkstyle on #channel\`_`
+              )
+              .setFooter({ text: 'UECBOT' }),
+          ],
+          allowedMentions: { parse: [] },
+        });
+      }
+      return;
+    }
 
     const askCmd = content.match(/^!ask(?:\s+([\s\S]+))?$/i);
     if (askCmd) {

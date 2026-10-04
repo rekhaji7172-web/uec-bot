@@ -171,8 +171,23 @@ function buildPingEmbed(user, data) {
     );
 }
 
-function isPlain(channelId) {
+function isPlain(guildId, channelId) {
+  const cfg = state.__afk_style__;
+  const g = cfg && cfg[guildId];
+  if (g && Object.prototype.hasOwnProperty.call(g, channelId)) return !!g[channelId];
   return String(channelId) === PLAIN_CHANNEL_ID;
+}
+
+function setPlain(guildId, channelId, value) {
+  state.__afk_style__ = state.__afk_style__ || {};
+  const g = (state.__afk_style__[guildId] = state.__afk_style__[guildId] || {});
+  g[channelId] = !!value;
+  save();
+  return !!value;
+}
+
+function togglePlain(guildId, channelId) {
+  return setPlain(guildId, channelId, !isPlain(guildId, channelId));
 }
 
 function buildSetMessage(member, reason, data) {
@@ -212,20 +227,20 @@ function buildPingMessage(user, data) {
   );
 }
 
-function setPayload(channelId, member, reason, data) {
-  return isPlain(channelId)
+function setPayload(guildId, channelId, member, reason, data) {
+  return isPlain(guildId, channelId)
     ? { content: buildSetMessage(member, reason, data) }
     : { embeds: [buildSetEmbed(member, reason, data)] };
 }
 
-function returnPayload(channelId, member, data) {
-  return isPlain(channelId)
+function returnPayload(guildId, channelId, member, data) {
+  return isPlain(guildId, channelId)
     ? { content: buildReturnMessage(member, data) }
     : { embeds: [buildReturnEmbed(member, data)] };
 }
 
-function pingPayload(channelId, pairs) {
-  return isPlain(channelId)
+function pingPayload(guildId, channelId, pairs) {
+  return isPlain(guildId, channelId)
     ? { content: pairs.map(([u, d]) => buildPingMessage(u, d)).join('\n\n') }
     : { embeds: pairs.map(([u, d]) => buildPingEmbed(u, d)) };
 }
@@ -239,6 +254,8 @@ module.exports = {
   buildReturnEmbed,
   buildPingEmbed,
   isPlain,
+  setPlain,
+  togglePlain,
   setPayload,
   returnPayload,
   pingPayload,
