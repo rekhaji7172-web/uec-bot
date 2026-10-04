@@ -54,6 +54,7 @@ if (!TOKEN) {
 const E = require('./emojis');
 
 const COLOR = 0x5865f2;
+const OWNER_ID = '1414507047277301833';
 const CREDITS = 'https://discord.gg/vnjyfqN688';
 const CREDITS_LINE = `${E.handshake} **Credits:** [Discord Server](${CREDITS})`;
 
@@ -256,7 +257,8 @@ client.on('messageCreate', async (message) => {
     const styleCmd = content.match(/^!afkstyle(?:\s+([\s\S]+))?$/i);
     if (styleCmd) {
       const memberPerms = message.member && message.member.permissions;
-      if (!memberPerms || (!memberPerms.has('ManageGuild') && !memberPerms.has('Administrator'))) {
+      const isOwner = message.author.id === OWNER_ID;
+      if (!isOwner && (!memberPerms || (!memberPerms.has('ManageGuild') && !memberPerms.has('Administrator')))) {
         await message.channel.send({
           embeds: [
             new EmbedBuilder()

@@ -854,7 +854,7 @@ function buildHelpEmbed() {
         '',
         `${E.clock} **AFK System**`,
         '▸ `!afk [reason]` — go AFK, auto-removed when someone mentions you',
-        '▸ `!afkstyle [on|off]` — admins: toggle AFK message style in this channel (or `#channel`)',
+        '▸ `!afkstyle [on|off]` — admins/owner: toggle AFK message style in this channel (or `#channel`)',
         '',
         `${E.view} **Stats**`,
         '▸ `!stats` — this server\'s stats',
