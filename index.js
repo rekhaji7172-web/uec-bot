@@ -40,8 +40,8 @@ loadEnv();
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CHANNEL_IDS = new Set(
-  (process.env.CHANNEL_ID || '1513842246586208266')
-    .split(',')
+  ['1513842246586208266', '1553356936626307112']
+    .concat((process.env.CHANNEL_ID || '').split(','))
     .map((s) => s.trim())
     .filter(Boolean)
 );
